@@ -1,28 +1,24 @@
+// src/styles/colors.ts
 export const colors = {
-  primary: '#22c55e',
-  secondary: '#3b82f6',
-  danger: '#ef4444',
-  warning: '#f59e0b',
-  success: '#10b981',
-  
-  dark: {
-    bg: '#0f172a',
-    bgSecondary: '#1e293b',
-    bgTertiary: '#334155',
-    text: '#f1f5f9',
-    textSecondary: '#cbd5e1',
-    border: '#475569',
-  },
-  
-  check: '#fbbf24',
-  checkmate: '#ef4444',
-  lastMove: '#fef08a',
-  highlight: '#bfdbfe',
-};
+  primary: "#10b981",    // Verde (ações principais)
+  secondary: "#4b5563",  // Cinza (ações secundárias)
+  danger: "#ef4444",     // Vermelho (ações perigosas)
+  warning: "#f59e0b",    // Laranja (avisos)
+  success: "#22c55e",    // Verde claro (sucesso)
+  error: "#dc3545",      // Vermelho escuro (erros/desistir)
 
-export const shadows = {
-  sm: '0 1px 2px 0 rgba(0, 0, 0, 0.05)',
-  md: '0 4px 6px -1px rgba(0, 0, 0, 0.1)',
-  lg: '0 10px 15px -3px rgba(0, 0, 0, 0.1)',
-  xl: '0 20px 25px -5px rgba(0, 0, 0, 0.1)',
+  dark: {
+    bg: "#0f172a",         // Fundo principal escuro
+    bgSecondary: "#1e293b", // Fundo secundário escuro (cards)
+    bgTertiary: "#334155",  // Fundo terciário escuro (inputs)
+    text: "#f1f5f9",       // Texto claro principal
+    textSecondary: "#94a3b8", // Texto claro secundário
+    border: "#334155"      // Cor das bordas
+  },
+
+  // Cores específicas do Xadrez
+  check: "rgba(255, 0, 0, 0.4)",
+  checkmate: "#ffcccc",
+  lastMove: "rgba(255, 255, 0, 0.3)",
+  highlight: "rgba(255, 255, 0, 0.4)"
 };

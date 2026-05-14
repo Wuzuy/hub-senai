@@ -2,9 +2,11 @@ import { useEffect, useState } from "react";
 import { Chess, Square } from "chess.js";
 import { Chessboard } from "react-chessboard";
 import { useParams, useNavigate } from "react-router-dom";
-import { doc, onSnapshot, updateDoc } from "firebase/firestore";
+import { doc, onSnapshot, updateDoc, getDoc } from "firebase/firestore";
 import { db } from "../config/firebase";
 import { useAuth } from "../contexts/AuthContext";
+import { colors } from "../styles/colors";
+import { Button } from "../components/common/Button";
 
 const pieceImages: Record<string, string> = {
   wK: "https://upload.wikimedia.org/wikipedia/commons/4/42/Chess_klt45.svg",
@@ -53,45 +55,37 @@ export function ChessGame() {
   
   const [whiteTime, setWhiteTime] = useState(600);
   const [blackTime, setBlackTime] = useState(600);
+  const [whiteName, setWhiteName] = useState("Aguardando...");
+  const [blackName, setBlackName] = useState("Aguardando...");
 
   const navigate = useNavigate();
 
+  // Encontra o ultimo movimento comparando o FEN antigo e novo
   function findLastMoveFromFen(oldFen: string, newFen: string): { from: string; to: string } | null {
-    const oldGame = new Chess();
-    oldGame.load(oldFen);
+    const oldGame = new Chess(oldFen);
     const moves = oldGame.moves({ verbose: true });
-
     for (const move of moves) {
       const testGame = new Chess(oldFen);
       testGame.move({ from: move.from, to: move.to, promotion: "q" });
-      if (testGame.fen() === newFen) {
-        return { from: move.from, to: move.to };
-      }
+      if (testGame.fen() === newFen) return { from: move.from, to: move.to };
     }
     return null;
   }
 
-  // Sincroniza dados do Firebase
+  // Sincroniza Firebase
   useEffect(() => {
     if (!matchId) return;
-    
     const unsubscribe = onSnapshot(doc(db, "chess_matches", matchId), (docSnap) => {
       if (docSnap.exists()) {
         const data = docSnap.data();
         setMatchData(data);
-        
         setGame((currentGame) => {
           if (data.fen !== currentGame.fen()) {
-            const newGame = new Chess();
-            newGame.load(data.fen);
-            
+            const newGame = new Chess(data.fen);
             if (previousFen && previousFen !== data.fen) {
               const move = findLastMoveFromFen(previousFen, data.fen);
-              if (move) {
-                setLastMove(move);
-              }
+              if (move) setLastMove(move);
             }
-            
             setPreviousFen(data.fen);
             setWhiteTime(data.whiteTime ?? 600);
             setBlackTime(data.blackTime ?? 600);
@@ -101,26 +95,35 @@ export function ChessGame() {
         });
       }
     });
-
     return () => unsubscribe();
   }, [matchId, previousFen]);
 
-  // Cronometro decrementa a cada 1 segundo
+  // Busca Nomes dos Jogadores
+  useEffect(() => {
+    async function fetchNames() {
+      if (matchData?.playerWhite) {
+        const docSnap = await getDoc(doc(db, "users", matchData.playerWhite));
+        if (docSnap.exists()) setWhiteName(docSnap.data().username);
+      }
+      if (matchData?.playerBlack) {
+        const docSnap = await getDoc(doc(db, "users", matchData.playerBlack));
+        if (docSnap.exists()) setBlackName(docSnap.data().username);
+      }
+    }
+    fetchNames();
+  }, [matchData?.playerWhite, matchData?.playerBlack]);
+
+  // Cronometro
   useEffect(() => {
     if (matchData?.status !== "playing" || game.isGameOver()) return;
-
     const timer = setInterval(() => {
-      if (game.turn() === 'w') {
-        setWhiteTime((t) => (t > 0 ? t - 1 : 0));
-      } else {
-        setBlackTime((t) => (t > 0 ? t - 1 : 0));
-      }
+      if (game.turn() === 'w') setWhiteTime((t) => (t > 0 ? t - 1 : 0));
+      else setBlackTime((t) => (t > 0 ? t - 1 : 0));
     }, 1000);
-
     return () => clearInterval(timer);
   }, [matchData?.status, game.fen()]);
 
-  // Finaliza a partida ao zerar o tempo
+  // Vitoria por Tempo
   useEffect(() => {
     if ((whiteTime === 0 || blackTime === 0) && matchData?.status === "playing" && matchId) {
       updateDoc(doc(db, "chess_matches", matchId), {
@@ -134,162 +137,88 @@ export function ChessGame() {
   function getMoveOptions(square: string) {
     const sq = square as Square;
     const moves = game.moves({ square: sq, verbose: true });
-
-    if (moves.length === 0) {
-      setOptionSquares({});
-      return;
-    }
-
+    if (moves.length === 0) { setOptionSquares({}); return; }
+    
     const newSquares: Record<string, { background: string; borderRadius?: string }> = {};
     newSquares[square] = { background: "rgba(255, 255, 0, 0.4)" };
-
+    
     moves.forEach((move) => {
       const targetSq = typeof move === 'string' ? move : move.to;
       const targetPiece = game.get(targetSq as Square);
       const sourcePiece = game.get(sq);
       
       const isCapture = targetPiece && sourcePiece && targetPiece.color !== sourcePiece.color;
-
+      
       newSquares[targetSq] = {
-        background: isCapture
-            ? "radial-gradient(circle, rgba(0,0,0,.1) 85%, transparent 85%)"
-            : "radial-gradient(circle, rgba(0,0,0,.1) 25%, transparent 25%)",
+        background: isCapture ? "radial-gradient(circle, rgba(0,0,0,.1) 85%, transparent 85%)" : "radial-gradient(circle, rgba(0,0,0,.1) 25%, transparent 25%)",
         borderRadius: "50%",
       };
     });
-
     setOptionSquares(newSquares);
   }
 
   function getSquareStyles(): Record<string, React.CSSProperties> {
     const styles: Record<string, React.CSSProperties> = {};
-    
     if (lastMove) {
-      styles[lastMove.from] = {
-        backgroundColor: "rgba(255, 255, 0, 0.3)",
-      };
-      styles[lastMove.to] = {
-        backgroundColor: "rgba(255, 255, 0, 0.3)",
-      };
+      styles[lastMove.from] = { backgroundColor: "rgba(255, 255, 0, 0.3)" };
+      styles[lastMove.to] = { backgroundColor: "rgba(255, 255, 0, 0.3)" };
     }
-
     if (game.isCheck()) {
-      const board = game.board();
       const kingColor = game.turn();
-      
-      for (let row = 0; row < 8; row++) {
-        for (let col = 0; col < 8; col++) {
-          const piece = board[row][col];
-          if (piece && piece.type === 'k' && piece.color === kingColor) {
-            const square = String.fromCharCode(97 + col) + (8 - row);
-            styles[square] = {
-              backgroundColor: "rgba(255, 0, 0, 0.4)",
-            };
-          }
+      game.board().forEach((row, rowIndex) => row.forEach((piece, colIndex) => {
+        if (piece?.type === 'k' && piece.color === kingColor) {
+          styles[String.fromCharCode(97 + colIndex) + (8 - rowIndex)] = { backgroundColor: "rgba(255, 0, 0, 0.4)" };
         }
-      }
+      }));
     }
-
     return { ...styles, ...optionSquares };
   }
 
   function onSquareClick(square: string) {
     if (matchData?.status !== "playing") return;
-    
-    const isWhiteTurn = game.turn() === 'w';
     const isPlayerWhite = currentUser?.uid === matchData?.playerWhite;
-    const isPlayerBlack = currentUser?.uid === matchData?.playerBlack;
-
-    if ((isWhiteTurn && !isPlayerWhite) || (!isWhiteTurn && !isPlayerBlack)) {
-      return;
-    }
+    if (game.turn() !== (isPlayerWhite ? 'w' : 'b')) return;
 
     if (moveFrom) {
       const gameCopy = new Chess(game.fen());
       try {
-        const move = gameCopy.move({
-          from: moveFrom,
-          to: square,
-          promotion: "q",
-        });
-
-        if (move) {
+        if (gameCopy.move({ from: moveFrom, to: square, promotion: "q" })) {
           setGame(gameCopy);
-          setLastMove(null);
-          if (matchId) {
-            updateDoc(doc(db, "chess_matches", matchId), { 
-              fen: gameCopy.fen(),
-              whiteTime,
-              blackTime
-            }).catch(console.error);
-          }
-          setMoveFrom(null);
-          setOptionSquares({});
-          return;
+          if (matchId) updateDoc(doc(db, "chess_matches", matchId), { fen: gameCopy.fen(), whiteTime, blackTime });
+          setMoveFrom(null); setOptionSquares({}); return;
         }
-      } catch (e) {
-      }
+      } catch (e) {}
     }
 
     const piece = game.get(square as Square);
-    if (piece && piece.color === (isPlayerWhite ? 'w' : 'b')) {
-      setMoveFrom(square);
-      getMoveOptions(square);
+    if (piece?.color === (isPlayerWhite ? 'w' : 'b')) {
+      setMoveFrom(square); getMoveOptions(square);
     } else {
-      setMoveFrom(null);
-      setOptionSquares({});
+      setMoveFrom(null); setOptionSquares({});
     }
   }
 
   function onDrop(sourceSquare: string, targetSquare: string): boolean {
-    setMoveFrom(null);
-    setOptionSquares({});
-
+    setMoveFrom(null); setOptionSquares({});
     if (matchData?.status !== "playing") return false;
-
-    const isWhiteTurn = game.turn() === 'w';
     const isPlayerWhite = currentUser?.uid === matchData.playerWhite;
-    const isPlayerBlack = currentUser?.uid === matchData.playerBlack;
-
-    if ((isWhiteTurn && !isPlayerWhite) || (!isWhiteTurn && !isPlayerBlack)) {
-      return false;
-    }
+    if (game.turn() !== (isPlayerWhite ? 'w' : 'b')) return false;
 
     const gameCopy = new Chess(game.fen());
     try {
-      const move = gameCopy.move({
-        from: sourceSquare,
-        to: targetSquare,
-        promotion: "q",
-      });
-      if (!move) return false;
-    } catch (e) {
-      return false; 
-    }
-
-    setGame(gameCopy);
-    setLastMove(null);
-    
-    if (matchId) {
-      updateDoc(doc(db, "chess_matches", matchId), { 
-        fen: gameCopy.fen(),
-        whiteTime,
-        blackTime
-      }).catch(console.error);
-    }
-    
-    return true;
+      if (gameCopy.move({ from: sourceSquare, to: targetSquare, promotion: "q" })) {
+        setGame(gameCopy);
+        if (matchId) updateDoc(doc(db, "chess_matches", matchId), { fen: gameCopy.fen(), whiteTime, blackTime });
+        return true;
+      }
+    } catch (e) {}
+    return false;
   }
 
-  // Acoes da partida
   async function handleResign() {
     if (!matchId) return;
-    const myColor = currentUser?.uid === matchData.playerWhite ? 'w' : 'b';
-    await updateDoc(doc(db, "chess_matches", matchId), {
-      status: "finished",
-      winner: myColor === 'w' ? 'b' : 'w',
-      reason: "resign"
-    });
+    const winner = currentUser?.uid === matchData.playerWhite ? 'b' : 'w';
+    await updateDoc(doc(db, "chess_matches", matchId), { status: "finished", winner, reason: "resign" });
   }
 
   async function handleOfferDraw() {
@@ -300,11 +229,7 @@ export function ChessGame() {
 
   async function handleAcceptDraw() {
     if (!matchId) return;
-    await updateDoc(doc(db, "chess_matches", matchId), { 
-      status: "draw", 
-      reason: "agreement",
-      drawOffer: null 
-    });
+    await updateDoc(doc(db, "chess_matches", matchId), { status: "draw", reason: "agreement", drawOffer: null });
   }
 
   async function handleDeclineDraw() {
@@ -313,90 +238,127 @@ export function ChessGame() {
   }
 
   const formatTime = (time: number) => `${Math.floor(time / 60)}:${(time % 60).toString().padStart(2, '0')}`;
-
-  const isWhiteTurn = game.turn() === 'w';
-  const myColor = currentUser?.uid === matchData?.playerWhite ? 'w' : 'b';
-  const opponentDrawOffer = matchData?.drawOffer && matchData.drawOffer !== myColor;
-
-  let turnText = "";
   
-  if (matchData?.status === "waiting") {
-    turnText = "Aguardando oponente...";
-  } else if (matchData?.status === "finished") {
-    turnText = `Fim de jogo! Vitória das ${matchData.winner === 'w' ? 'Brancas' : 'Pretas'}`;
-  } else if (matchData?.status === "draw" || game.isDraw()) {
-    turnText = "Empate!";
-  } else if (game.isCheckmate()) {
-    turnText = "Xeque-Mate!";
-  } else {
-    const isMyTurn = (isWhiteTurn && currentUser?.uid === matchData?.playerWhite) || 
-                     (!isWhiteTurn && currentUser?.uid === matchData?.playerBlack);
-    turnText = isMyTurn ? "Sua vez de jogar!" : "Aguarde a jogada do oponente...";
-  }
-
-  const boardOrientation = currentUser?.uid === matchData?.playerBlack ? "black" : "white";
+  const isWhite = currentUser?.uid === matchData?.playerWhite;
+  const boardOrientation = isWhite ? "white" : "black";
+  
+  const opponentName = isWhite ? blackName : whiteName;
+  const opponentTime = isWhite ? blackTime : whiteTime;
+  const myName = isWhite ? whiteName : blackName;
+  const myTime = isWhite ? whiteTime : blackTime;
+  const myColor = isWhite ? 'w' : 'b';
 
   return (
-    <div style={{ maxWidth: "500px", margin: "0 auto", textAlign: "center", fontFamily: "sans-serif" }}>
-      <button onClick={() => navigate("/")} style={{ marginBottom: "20px", padding: "8px 16px", cursor: "pointer" }}>
-        Voltar ao Hub
-      </button>
-
-      <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "10px", fontWeight: "bold" }}>
-        <span style={{ color: "black", backgroundColor: "white", padding: "4px 8px", borderRadius: "4px", border: "1px solid black" }}>
-          Brancas: {formatTime(whiteTime)}
-        </span>
-        <span style={{ color: "white", backgroundColor: "black", padding: "4px 8px", borderRadius: "4px", border: "1px solid black" }}>
-          Pretas: {formatTime(blackTime)}
-        </span>
-      </div>
-
-      <div style={{
-        padding: "10px",
-        marginBottom: "20px",
-        backgroundColor: game.isCheckmate() || matchData?.status === "finished" ? "#ffcccc" : (turnText === "Sua vez de jogar!" ? "#d4edda" : "#f8d7da"),
-        color: game.isCheckmate() || matchData?.status === "finished" ? "#721c24" : (turnText === "Sua vez de jogar!" ? "#155724" : "#721c24"),
-        borderRadius: "8px",
-        fontWeight: "bold",
-        border: "1px solid",
-        borderColor: game.isCheckmate() || matchData?.status === "finished" ? "#f5c6cb" : (turnText === "Sua vez de jogar!" ? "#c3e6cb" : "#f5c6cb")
-      }}>
-        {turnText}
-        {game.isCheck() && !game.isCheckmate() && " (Xeque!)"}
-      </div>
-
-      {opponentDrawOffer && matchData?.status === "playing" && (
-        <div style={{ padding: "10px", marginBottom: "10px", backgroundColor: "#fff3cd", border: "1px solid #ffeeba", borderRadius: "8px" }}>
-          <p style={{ margin: "0 0 10px 0" }}>Oponente ofereceu empate!</p>
-          <button onClick={handleAcceptDraw} style={{ marginRight: "10px", backgroundColor: "#28a745", color: "white", border: "none", padding: "6px 12px", borderRadius: "4px", cursor: "pointer" }}>Aceitar</button>
-          <button onClick={handleDeclineDraw} style={{ backgroundColor: "#dc3545", color: "white", border: "none", padding: "6px 12px", borderRadius: "4px", cursor: "pointer" }}>Recusar</button>
-        </div>
-      )}
+    <div style={{ minHeight: "100vh", backgroundColor: colors.dark.bg, color: colors.dark.text, padding: "20px", display: "flex", flexDirection: "column", alignItems: "center", boxSizing: "border-box" }}>
       
-      <div style={{ boxShadow: "0px 4px 10px rgba(0,0,0,0.5)", marginBottom: "20px" }}>
-        <Chessboard
-          options={{
-            position: game.fen(),
-            onPieceDrop: ({ sourceSquare, targetSquare }) =>
-              sourceSquare && targetSquare ? onDrop(sourceSquare, targetSquare) : false,
-            onSquareClick: ({ square }) => square && onSquareClick(square),
-            pieces: customPieces,
-            boardOrientation,
-            squareStyles: getSquareStyles(),
-          }}
-        />
+      {/* Botão Voltar */}
+      <div style={{ width: "100%", maxWidth: "1000px", marginBottom: "20px" }}>
+        <Button variant="secondary" onClick={() => navigate("/")}>&larr; Voltar ao Hub</Button>
       </div>
 
-      {matchData?.status === "playing" && (
-        <div style={{ display: "flex", justifyContent: "center", gap: "10px" }}>
-          <button onClick={handleOfferDraw} disabled={matchData.drawOffer === myColor} style={{ padding: "8px 16px", cursor: matchData.drawOffer === myColor ? "default" : "pointer" }}>
-            {matchData.drawOffer === myColor ? "Empate Oferecido..." : "Oferecer Empate"}
-          </button>
-          <button onClick={handleResign} style={{ padding: "8px 16px", backgroundColor: "#dc3545", color: "white", border: "none", borderRadius: "4px", cursor: "pointer" }}>
-            Desistir
-          </button>
+      {/* Contentor Principal */}
+      <div style={{ width: "100%", maxWidth: "1000px", display: "flex", flexWrap: "wrap", gap: "20px", justifyContent: "center", alignItems: "flex-start" }}>
+        
+        {/* Lado Esquerdo: Tabuleiro e Jogadores */}
+        <div style={{ flex: "2 1 400px", minWidth: "300px", maxWidth: "600px", width: "100%", display: "flex", flexDirection: "column" }}>
+          
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "12px 16px", backgroundColor: colors.dark.bgSecondary, borderRadius: "8px 8px 0 0", borderBottom: `1px solid ${colors.dark.border}` }}>
+            <span style={{ fontWeight: "600", fontSize: "16px" }}>{opponentName}</span>
+            <span style={{ fontFamily: "monospace", fontSize: "1.2rem", backgroundColor: colors.dark.bgTertiary, padding: "4px 8px", borderRadius: "4px" }}>
+              {formatTime(opponentTime)}
+            </span>
+          </div>
+
+          <div style={{ width: "100%", backgroundColor: colors.dark.bgSecondary, boxShadow: "0px 4px 15px rgba(0,0,0,0.3)" }}>
+            <Chessboard
+              options={{
+                position: game.fen(),
+                onPieceDrop: ({ sourceSquare, targetSquare }) => sourceSquare && targetSquare ? onDrop(sourceSquare, targetSquare) : false,
+                onSquareClick: ({ square }) => square && onSquareClick(square),
+                pieces: customPieces,
+                boardOrientation,
+                squareStyles: getSquareStyles(),
+              }}
+            />
+          </div>
+
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "12px 16px", backgroundColor: colors.dark.bgSecondary, borderRadius: "0 0 8px 8px", borderTop: `1px solid ${colors.dark.border}` }}>
+            <span style={{ fontWeight: "600", fontSize: "16px" }}>{myName} (Você)</span>
+            <span style={{ fontFamily: "monospace", fontSize: "1.2rem", backgroundColor: colors.dark.bgTertiary, padding: "4px 8px", borderRadius: "4px" }}>
+              {formatTime(myTime)}
+            </span>
+          </div>
         </div>
-      )}
+
+        {/* Lado Direito: Ações e Chat */}
+        <div style={{ flex: "1 1 300px", minWidth: "300px", maxWidth: "400px", width: "100%", display: "flex", flexDirection: "column", gap: "16px" }}>
+          
+          {matchData?.drawOffer && matchData.drawOffer !== myColor && matchData.status === "playing" && (
+            <div style={{ padding: "16px", backgroundColor: colors.dark.bgSecondary, borderRadius: "8px", border: `2px solid ${colors.primary}`, display: "flex", flexDirection: "column", gap: "12px" }}>
+              <span style={{ fontWeight: "600", textAlign: "center" }}>Oponente ofereceu empate!</span>
+              <div style={{ display: "flex", gap: "10px" }}>
+                <Button variant="primary" fullWidth onClick={handleAcceptDraw}>Aceitar</Button>
+                <Button variant="secondary" fullWidth onClick={handleDeclineDraw}>Recusar</Button>
+              </div>
+            </div>
+          )}
+
+          {matchData?.status === "finished" && (
+            <div style={{ padding: "20px", backgroundColor: colors.dark.bgSecondary, borderRadius: "8px", textAlign: "center", border: `2px solid ${matchData.winner === myColor ? colors.primary : colors.danger}` }}>
+              <h3 style={{ margin: "0 0 10px 0" }}>Fim de jogo!</h3>
+              <p style={{ margin: 0, color: colors.dark.textSecondary }}>{matchData.winner === myColor ? "Você venceu!" : "Você perdeu."} ({matchData.reason})</p>
+            </div>
+          )}
+
+          {matchData?.status === "draw" && (
+             <div style={{ padding: "20px", backgroundColor: colors.dark.bgSecondary, borderRadius: "8px", textAlign: "center", border: `2px solid ${colors.dark.border}` }}>
+               <h3 style={{ margin: "0 0 10px 0" }}>Empate!</h3>
+               <p style={{ margin: 0, color: colors.dark.textSecondary }}>({matchData.reason})</p>
+             </div>
+          )}
+
+          <div style={{ flex: 1, minHeight: "350px", backgroundColor: colors.dark.bgSecondary, borderRadius: "8px", border: `1px solid ${colors.dark.border}`, display: "flex", flexDirection: "column", overflow: "hidden" }}>
+            <div style={{ padding: "12px 16px", borderBottom: `1px solid ${colors.dark.border}`, fontWeight: "600", fontSize: "14px", backgroundColor: colors.dark.bgTertiary }}>
+              Chat da Partida
+            </div>
+            <div style={{ flex: 1, padding: "16px", overflowY: "auto", color: colors.dark.textSecondary, fontSize: "14px", display: "flex", flexDirection: "column", justifyContent: "center" }}>
+              <p style={{ textAlign: "center", fontStyle: "italic", margin: 0 }}>Sala de chat iniciada. (Em breve)</p>
+            </div>
+            <div style={{ padding: "12px", borderTop: `1px solid ${colors.dark.border}`, display: "flex", gap: "8px", backgroundColor: colors.dark.bg }}>
+              <input 
+                type="text" 
+                placeholder="Mensagem..." 
+                disabled
+                style={{ flex: 1, padding: "10px 12px", borderRadius: "6px", border: `1px solid ${colors.dark.border}`, backgroundColor: colors.dark.bgTertiary, color: colors.dark.text, outline: "none" }} 
+              />
+              <Button variant="primary" disabled style={{ opacity: 0.5 }}>Enviar</Button>
+            </div>
+          </div>
+
+          {matchData?.status === "playing" && (
+            <div style={{ display: "flex", gap: "12px", backgroundColor: colors.dark.bgSecondary, padding: "16px", borderRadius: "8px", border: `1px solid ${colors.dark.border}` }}>
+              <Button 
+                variant="secondary" 
+                fullWidth
+                onClick={handleOfferDraw} 
+                disabled={matchData.drawOffer === myColor}
+                style={{ fontWeight: "600", padding: "12px 0" }}
+              >
+                {matchData.drawOffer === myColor ? "Empate Enviado" : "Oferecer Empate"}
+              </Button>
+              <Button 
+                variant="danger" 
+                fullWidth 
+                onClick={handleResign}
+                style={{ fontWeight: "600", padding: "12px 0" }}
+              >
+                Desistir
+              </Button>
+            </div>
+          )}
+
+        </div>
+      </div>
     </div>
   );
 }
