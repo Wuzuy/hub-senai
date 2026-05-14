@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useAuth } from "../contexts/AuthContext";
 import { db, auth } from "../config/firebase";
-import { doc, getDoc, setDoc, updateDoc, collection, query, where, getDocs, limit, onSnapshot, or, and } from "firebase/firestore";
+import { doc, getDoc, setDoc, updateDoc, collection, query, where, onSnapshot, or, and, deleteDoc, limit, getDocs } from "firebase/firestore";
 import { signOut } from "firebase/auth";
 import { useNavigate } from "react-router-dom";
 import { colors } from "../styles/colors";
@@ -11,7 +11,7 @@ export function Hub() {
   const { currentUser } = useAuth();
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const [userData, setUserData] = useState<any>(null);
-  const [activeMatchId, setActiveMatchId] = useState<string | null>(null);
+  const [activeMatch, setActiveMatch] = useState<{ id: string; status: string } | null>(null);
   const [joinId, setJoinId] = useState("");
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const [availableMatches, setAvailableMatches] = useState<any[]>([]);
@@ -28,6 +28,7 @@ export function Hub() {
     fetchUser();
   }, [currentUser]);
 
+  // Monitora partidas atias (waiting ou playing) do usuário atual
   useEffect(() => {
     if (!currentUser) return;
     const q = query(
@@ -42,8 +43,12 @@ export function Hub() {
     );
 
     const unsubscribe = onSnapshot(q, (snapshot) => {
-      if (!snapshot.empty) setActiveMatchId(snapshot.docs[0].id);
-      else setActiveMatchId(null);
+      if (!snapshot.empty) {
+        const doc = snapshot.docs[0];
+        setActiveMatch({ id: doc.id, status: doc.data().status });
+      } else {
+        setActiveMatch(null);
+      }
     });
 
     return () => unsubscribe();
@@ -63,8 +68,9 @@ export function Hub() {
     navigate("/login");
   };
 
+  // Cria um novo documento de partida com status waiting
   const createNewMatch = async () => {
-    if (!currentUser || activeMatchId) return null;
+    if (!currentUser || activeMatch) return null;
     const matchId = Math.floor(100000 + Math.random() * 900000).toString();
     await setDoc(doc(db, "chess_matches", matchId), {
       fen: "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
@@ -73,14 +79,21 @@ export function Hub() {
       status: "waiting",
       whiteTime: 600,
       blackTime: 600,
-      drawOffer: null,
-      winner: null
+      createdAt: Date.now()
     });
     return matchId;
   };
 
+  // Deleta a partida se o usuário cancelar a busca
+  const handleCancelMatch = async () => {
+    if (activeMatch?.id && activeMatch.status === "waiting") {
+      await deleteDoc(doc(db, "chess_matches", activeMatch.id));
+    }
+  };
+
   const handleRandomMatch = async () => {
-    if (!currentUser || activeMatchId) return;
+    if (!currentUser || activeMatch) return;
+    
     const q = query(collection(db, "chess_matches"), where("status", "==", "waiting"), limit(1));
     const snapshot = await getDocs(q);
 
@@ -95,37 +108,17 @@ export function Hub() {
         return;
       }
     }
-    const newMatchId = await createNewMatch();
-    if (newMatchId) navigate(`/chess/${newMatchId}`);
+    const newId = await createNewMatch();
+    if (newId) navigate(`/chess/${newId}`);
   };
 
-  // Nova função para entrar em partidas existentes clicando em "Jogar"
   const handleJoinMatch = async (id: string) => {
-    if (!currentUser || activeMatchId) return;
-    const matchRef = doc(db, "chess_matches", id);
-    await updateDoc(matchRef, {
+    if (!currentUser || activeMatch) return;
+    await updateDoc(doc(db, "chess_matches", id), {
       playerBlack: currentUser.uid,
       status: "playing"
     });
     navigate(`/chess/${id}`);
-  };
-
-  const handleJoinById = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!joinId || !currentUser || activeMatchId) return;
-
-    const matchRef = doc(db, "chess_matches", joinId);
-    const matchSnap = await getDoc(matchRef);
-
-    if (matchSnap.exists() && matchSnap.data().status === "waiting") {
-      await updateDoc(matchRef, {
-        playerBlack: currentUser.uid,
-        status: "playing"
-      });
-      navigate(`/chess/${joinId}`);
-    } else {
-      alert("Partida não encontrada ou você já possui um jogo ativo.");
-    }
   };
 
   return (
@@ -143,16 +136,27 @@ export function Hub() {
       </header>
 
       <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: "30px", maxWidth: "1200px", margin: "0 auto", width: "100%" }}>
-
+        
         <section style={{ display: "flex", flexDirection: "column", gap: "20px", backgroundColor: colors.dark.bgSecondary, padding: "30px", borderRadius: "12px" }}>
           <h2>Jogar Xadrez</h2>
-
-          {activeMatchId ? (
-            <div style={{ textAlign: "center", padding: "20px", border: `2px solid ${colors.primary}`, borderRadius: "8px" }}>
-              <p style={{ marginBottom: "15px" }}>Você tem uma partida em andamento!</p>
-              <Button size="lg" fullWidth onClick={() => navigate(`/chess/${activeMatchId}`)}>
-                Reentrar na Partida ({activeMatchId})
-              </Button>
+          
+          {activeMatch ? (
+            <div style={{ textAlign: "center", padding: "20px", border: `2px solid ${activeMatch.status === 'playing' ? colors.primary : colors.warning}`, borderRadius: "8px" }}>
+              <p style={{ marginBottom: "15px" }}>
+                {activeMatch.status === "playing" ? "Você tem uma partida em andamento!" : "Buscando oponente..."}
+              </p>
+              
+              <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
+                <Button size="lg" fullWidth onClick={() => navigate(`/chess/${activeMatch.id}`)}>
+                  {activeMatch.status === "playing" ? "Reentrar na Partida" : "Ver Tabuleiro"}
+                </Button>
+                
+                {activeMatch.status === "waiting" && (
+                  <Button variant="danger" onClick={handleCancelMatch}>
+                    Cancelar Busca
+                  </Button>
+                )}
+              </div>
             </div>
           ) : (
             <>
@@ -160,16 +164,16 @@ export function Hub() {
               <Button variant="secondary" size="lg" onClick={() => createNewMatch().then(id => id && navigate(`/chess/${id}`))}>
                 Criar Nova Partida
               </Button>
-
-              <form onSubmit={handleJoinById} style={{ display: "flex", gap: "10px", marginTop: "10px" }}>
-                <input
-                  type="text"
-                  placeholder="ID de 6 dígitos..."
+              
+              <form onSubmit={(e) => { e.preventDefault(); handleJoinMatch(joinId); }} style={{ display: "flex", gap: "10px", marginTop: "10px" }}>
+                <input 
+                  type="text" 
+                  placeholder="ID da partida..." 
                   value={joinId}
                   onChange={(e) => setJoinId(e.target.value)}
                   style={{ flex: 1, padding: "10px", borderRadius: "6px", border: `1px solid ${colors.dark.border}`, backgroundColor: colors.dark.bgTertiary, color: colors.dark.text }}
                 />
-                <Button type="submit" variant="primary">Entrar</Button>
+                <Button type="submit">Entrar</Button>
               </form>
             </>
           )}
@@ -179,11 +183,11 @@ export function Hub() {
           <h2>Lobby Aberto</h2>
           <ul style={{ listStyle: "none", padding: 0, display: "flex", flexDirection: "column", gap: "10px", marginTop: "15px" }}>
             {availableMatches.length === 0 && <li style={{ color: colors.dark.textSecondary }}>Nenhuma partida aberta.</li>}
-            {availableMatches.map((match) => (
-              <li key={match.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px", backgroundColor: colors.dark.bgTertiary, borderRadius: "6px" }}>
-                <span>ID: {match.id}</span>
-                {!activeMatchId && match.playerWhite !== currentUser?.uid && (
-                  <Button size="sm" onClick={() => handleJoinMatch(match.id)}>Jogar</Button>
+            {availableMatches.map((m) => (
+              <li key={m.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px", backgroundColor: colors.dark.bgTertiary, borderRadius: "6px" }}>
+                <span>ID: {m.id}</span>
+                {!activeMatch && m.playerWhite !== currentUser?.uid && (
+                  <Button size="sm" onClick={() => handleJoinMatch(m.id)}>Jogar</Button>
                 )}
               </li>
             ))}
