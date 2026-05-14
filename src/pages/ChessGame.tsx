@@ -50,6 +50,10 @@ export function ChessGame() {
   const [moveFrom, setMoveFrom] = useState<string | null>(null);
   const [lastMove, setLastMove] = useState<{ from: string; to: string } | null>(null);
   const [previousFen, setPreviousFen] = useState<string | null>(null);
+  
+  const [whiteTime, setWhiteTime] = useState(600);
+  const [blackTime, setBlackTime] = useState(600);
+
   const navigate = useNavigate();
 
   function findLastMoveFromFen(oldFen: string, newFen: string): { from: string; to: string } | null {
@@ -67,6 +71,7 @@ export function ChessGame() {
     return null;
   }
 
+  // Sincroniza dados do Firebase
   useEffect(() => {
     if (!matchId) return;
     
@@ -80,7 +85,6 @@ export function ChessGame() {
             const newGame = new Chess();
             newGame.load(data.fen);
             
-            // Encontrar o movimento que levou ao novo FEN
             if (previousFen && previousFen !== data.fen) {
               const move = findLastMoveFromFen(previousFen, data.fen);
               if (move) {
@@ -89,6 +93,8 @@ export function ChessGame() {
             }
             
             setPreviousFen(data.fen);
+            setWhiteTime(data.whiteTime ?? 600);
+            setBlackTime(data.blackTime ?? 600);
             return newGame;
           }
           return currentGame;
@@ -98,6 +104,32 @@ export function ChessGame() {
 
     return () => unsubscribe();
   }, [matchId, previousFen]);
+
+  // Cronometro decrementa a cada 1 segundo
+  useEffect(() => {
+    if (matchData?.status !== "playing" || game.isGameOver()) return;
+
+    const timer = setInterval(() => {
+      if (game.turn() === 'w') {
+        setWhiteTime((t) => (t > 0 ? t - 1 : 0));
+      } else {
+        setBlackTime((t) => (t > 0 ? t - 1 : 0));
+      }
+    }, 1000);
+
+    return () => clearInterval(timer);
+  }, [matchData?.status, game.fen()]);
+
+  // Finaliza a partida ao zerar o tempo
+  useEffect(() => {
+    if ((whiteTime === 0 || blackTime === 0) && matchData?.status === "playing" && matchId) {
+      updateDoc(doc(db, "chess_matches", matchId), {
+        status: "finished",
+        winner: whiteTime === 0 ? 'b' : 'w',
+        reason: "timeout"
+      }).catch(console.error);
+    }
+  }, [whiteTime, blackTime, matchData?.status, matchId]);
 
   function getMoveOptions(square: string) {
     const sq = square as Square;
@@ -132,7 +164,6 @@ export function ChessGame() {
   function getSquareStyles(): Record<string, React.CSSProperties> {
     const styles: Record<string, React.CSSProperties> = {};
     
-    // Destaca último movimento em amarelo
     if (lastMove) {
       styles[lastMove.from] = {
         backgroundColor: "rgba(255, 255, 0, 0.3)",
@@ -142,7 +173,6 @@ export function ChessGame() {
       };
     }
 
-    // Destaca o rei em xeque com vermelho
     if (game.isCheck()) {
       const board = game.board();
       const kingColor = game.turn();
@@ -160,7 +190,6 @@ export function ChessGame() {
       }
     }
 
-    // Mescla com optionSquares para manter as opções de movimento
     return { ...styles, ...optionSquares };
   }
 
@@ -188,7 +217,11 @@ export function ChessGame() {
           setGame(gameCopy);
           setLastMove(null);
           if (matchId) {
-            updateDoc(doc(db, "chess_matches", matchId), { fen: gameCopy.fen() }).catch(console.error);
+            updateDoc(doc(db, "chess_matches", matchId), { 
+              fen: gameCopy.fen(),
+              whiteTime,
+              blackTime
+            }).catch(console.error);
           }
           setMoveFrom(null);
           setOptionSquares({});
@@ -238,21 +271,63 @@ export function ChessGame() {
     setLastMove(null);
     
     if (matchId) {
-      updateDoc(doc(db, "chess_matches", matchId), { fen: gameCopy.fen() }).catch(console.error);
+      updateDoc(doc(db, "chess_matches", matchId), { 
+        fen: gameCopy.fen(),
+        whiteTime,
+        blackTime
+      }).catch(console.error);
     }
     
     return true;
   }
 
+  // Acoes da partida
+  async function handleResign() {
+    if (!matchId) return;
+    const myColor = currentUser?.uid === matchData.playerWhite ? 'w' : 'b';
+    await updateDoc(doc(db, "chess_matches", matchId), {
+      status: "finished",
+      winner: myColor === 'w' ? 'b' : 'w',
+      reason: "resign"
+    });
+  }
+
+  async function handleOfferDraw() {
+    if (!matchId) return;
+    const myColor = currentUser?.uid === matchData.playerWhite ? 'w' : 'b';
+    await updateDoc(doc(db, "chess_matches", matchId), { drawOffer: myColor });
+  }
+
+  async function handleAcceptDraw() {
+    if (!matchId) return;
+    await updateDoc(doc(db, "chess_matches", matchId), { 
+      status: "draw", 
+      reason: "agreement",
+      drawOffer: null 
+    });
+  }
+
+  async function handleDeclineDraw() {
+    if (!matchId) return;
+    await updateDoc(doc(db, "chess_matches", matchId), { drawOffer: null });
+  }
+
+  const formatTime = (time: number) => `${Math.floor(time / 60)}:${(time % 60).toString().padStart(2, '0')}`;
+
   const isWhiteTurn = game.turn() === 'w';
+  const myColor = currentUser?.uid === matchData?.playerWhite ? 'w' : 'b';
+  const opponentDrawOffer = matchData?.drawOffer && matchData.drawOffer !== myColor;
+
   let turnText = "";
   
   if (matchData?.status === "waiting") {
     turnText = "Aguardando oponente...";
+  } else if (matchData?.status === "finished") {
+    turnText = `Fim de jogo! Vitória das ${matchData.winner === 'w' ? 'Brancas' : 'Pretas'}`;
+  } else if (matchData?.status === "draw" || game.isDraw()) {
+    turnText = "Empate!";
   } else if (game.isCheckmate()) {
     turnText = "Xeque-Mate!";
-  } else if (game.isDraw()) {
-    turnText = "Empate!";
   } else {
     const isMyTurn = (isWhiteTurn && currentUser?.uid === matchData?.playerWhite) || 
                      (!isWhiteTurn && currentUser?.uid === matchData?.playerBlack);
@@ -267,21 +342,38 @@ export function ChessGame() {
         Voltar ao Hub
       </button>
 
+      <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "10px", fontWeight: "bold" }}>
+        <span style={{ color: "black", backgroundColor: "white", padding: "4px 8px", borderRadius: "4px", border: "1px solid black" }}>
+          Brancas: {formatTime(whiteTime)}
+        </span>
+        <span style={{ color: "white", backgroundColor: "black", padding: "4px 8px", borderRadius: "4px", border: "1px solid black" }}>
+          Pretas: {formatTime(blackTime)}
+        </span>
+      </div>
+
       <div style={{
         padding: "10px",
         marginBottom: "20px",
-        backgroundColor: game.isCheckmate() ? "#ffcccc" : (turnText === "Sua vez de jogar!" ? "#d4edda" : "#f8d7da"),
-        color: game.isCheckmate() ? "#721c24" : (turnText === "Sua vez de jogar!" ? "#155724" : "#721c24"),
+        backgroundColor: game.isCheckmate() || matchData?.status === "finished" ? "#ffcccc" : (turnText === "Sua vez de jogar!" ? "#d4edda" : "#f8d7da"),
+        color: game.isCheckmate() || matchData?.status === "finished" ? "#721c24" : (turnText === "Sua vez de jogar!" ? "#155724" : "#721c24"),
         borderRadius: "8px",
         fontWeight: "bold",
         border: "1px solid",
-        borderColor: game.isCheckmate() ? "#f5c6cb" : (turnText === "Sua vez de jogar!" ? "#c3e6cb" : "#f5c6cb")
+        borderColor: game.isCheckmate() || matchData?.status === "finished" ? "#f5c6cb" : (turnText === "Sua vez de jogar!" ? "#c3e6cb" : "#f5c6cb")
       }}>
         {turnText}
         {game.isCheck() && !game.isCheckmate() && " (Xeque!)"}
       </div>
+
+      {opponentDrawOffer && matchData?.status === "playing" && (
+        <div style={{ padding: "10px", marginBottom: "10px", backgroundColor: "#fff3cd", border: "1px solid #ffeeba", borderRadius: "8px" }}>
+          <p style={{ margin: "0 0 10px 0" }}>Oponente ofereceu empate!</p>
+          <button onClick={handleAcceptDraw} style={{ marginRight: "10px", backgroundColor: "#28a745", color: "white", border: "none", padding: "6px 12px", borderRadius: "4px", cursor: "pointer" }}>Aceitar</button>
+          <button onClick={handleDeclineDraw} style={{ backgroundColor: "#dc3545", color: "white", border: "none", padding: "6px 12px", borderRadius: "4px", cursor: "pointer" }}>Recusar</button>
+        </div>
+      )}
       
-      <div style={{ boxShadow: "0px 4px 10px rgba(0,0,0,0.5)" }}>
+      <div style={{ boxShadow: "0px 4px 10px rgba(0,0,0,0.5)", marginBottom: "20px" }}>
         <Chessboard
           options={{
             position: game.fen(),
@@ -294,6 +386,17 @@ export function ChessGame() {
           }}
         />
       </div>
+
+      {matchData?.status === "playing" && (
+        <div style={{ display: "flex", justifyContent: "center", gap: "10px" }}>
+          <button onClick={handleOfferDraw} disabled={matchData.drawOffer === myColor} style={{ padding: "8px 16px", cursor: matchData.drawOffer === myColor ? "default" : "pointer" }}>
+            {matchData.drawOffer === myColor ? "Empate Oferecido..." : "Oferecer Empate"}
+          </button>
+          <button onClick={handleResign} style={{ padding: "8px 16px", backgroundColor: "#dc3545", color: "white", border: "none", borderRadius: "4px", cursor: "pointer" }}>
+            Desistir
+          </button>
+        </div>
+      )}
     </div>
   );
 }

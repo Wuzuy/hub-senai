@@ -1,7 +1,6 @@
 import { useEffect, useState } from "react";
 import { useAuth } from "../contexts/AuthContext";
 import { db, auth } from "../config/firebase";
-// Importações atualizadas para busca e atualização
 import { doc, getDoc, setDoc, updateDoc, collection, query, where, onSnapshot } from "firebase/firestore";
 import { signOut } from "firebase/auth";
 import { useNavigate } from "react-router-dom";
@@ -27,7 +26,6 @@ export function Hub() {
     fetchUser();
   }, [currentUser]);
 
-  // Lista partidas aguardando segundo jogador
   useEffect(() => {
     const q = query(collection(db, "chess_matches"), where("status", "==", "waiting"));
     const unsubscribe = onSnapshot(q, (snapshot) => {
@@ -51,13 +49,16 @@ export function Hub() {
       fen: "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
       playerWhite: currentUser.uid,
       playerBlack: null,
-      status: "waiting"
+      status: "waiting",
+      whiteTime: 600, // 10 minutos em segundos
+      blackTime: 600,
+      drawOffer: null,
+      winner: null
     });
 
     navigate(`/chess/${matchId}`);
   };
 
-  // Define o usuário atual como playerBlack e inicia a partida
   const handleJoinMatch = async (matchId: string) => {
     if (!currentUser) return;
     
