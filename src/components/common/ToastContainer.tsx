@@ -1,5 +1,6 @@
-import { useToast } from '../hooks/useToast';
-import { colors } from '../styles/colors';
+import { useToast } from '../../hooks/useToast';
+import { colors } from '../../styles/colors';
+import { Toast } from '../../types/toast';
 
 export function ToastContainer() {
   const { toasts, removeToast } = useToast();
@@ -17,7 +18,7 @@ export function ToastContainer() {
         maxWidth: '400px',
       }}
     >
-      {toasts.map((toast) => (
+      {toasts.map((toast: Toast) => (
         <div
           key={toast.id}
           style={{
@@ -57,14 +58,8 @@ export function ToastContainer() {
       ))}
       <style>{`
         @keyframes slideIn {
-          from {
-            transform: translateX(100%);
-            opacity: 0;
-          }
-          to {
-            transform: translateX(0);
-            opacity: 1;
-          }
+          from { transform: translateX(100%); opacity: 0; }
+          to { transform: translateX(0); opacity: 1; }
         }
       `}</style>
     </div>
